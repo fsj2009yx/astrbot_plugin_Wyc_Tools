@@ -1,3 +1,17 @@
+## [未发布] - 2026-10-21
+
+### 🐛 群文件接口与返回结果修复
+
+- 群文件工具统一处理已解包的业务数据和 OneBot 响应信封，同时检查业务层 `ok`、`result`、`retCode` 等失败信息，避免成功误报失败、失败误报成功。
+- `list_group_files` 同时列出文件和文件夹，补充文件夹名称、创建信息、文件上传日期、`busid` 与当前父目录；取消插件自身的前 20 个文件截断。新增 `folder_id`、`file_count` 参数，默认查询根目录、50 条，仅展示本次接口返回内容。
+- 修复移动、重命名、传输工具重复读取 `data.ok` 的问题；保留 NapCat 正确的 `current_parent_directory`、`target_parent_directory` 参数名。
+- 创建文件夹兼容嵌套结果和文件夹 ID；删除文件支持可选 `busid`，并识别底层业务失败。
+- 上传群文件支持 `folder_id` 指定目标文件夹；提示上传接口返回的原始文件 UUID 需通过重新列出文件获取可供后续操作的 `file_id`。
+- 新增 `get_group_file_url` 工具及同名管理员命令，返回实际下载 URL；纠正 `trans_group_file` 文案，只表示提交 NapCat 传输请求，不承诺返回链接或下载到本地。
+- 隐私模式保留由群文件工具确认的操作 ID 和下载 URL，群号、创建者 QQ 等身份信息继续脱敏。
+- 更新管理员命令：`/list_files [folder_id] [file_count]`、`/delete_group_file <file_id> [busid]`、`/get_group_file_url <file_id> [busid]`；旧命令继续保留。
+- 新增[群文件操作说明](docs/群文件操作说明.md)，列明官方接口来源、限制与本地回归测试方式。验证使用模拟响应，未声明完成真实 NapCat / QQ 联调。
+
 ## [5.9.0] - 2026-10-05
 
 ### ✨ 新增：自定义 Python 函数工具（WebUI 可写）

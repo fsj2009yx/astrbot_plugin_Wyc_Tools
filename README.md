@@ -11,7 +11,7 @@
 > **升级 / 重装不丢数据，无需手动迁移**。本文档历史更新日志中出现的
 > `qzone_tools` 均指本插件旧名。
 
-为 [AstrBot](https://github.com/AstrBotDevs/AstrBot) 提供 **110 个 LLM 可调用工具**：QQ空间、群管理、消息收发、记忆管理，以及一套完整的**视觉浏览器自动化**。
+为 [AstrBot](https://github.com/AstrBotDevs/AstrBot) 提供 **111 个 LLM 可调用工具**：QQ空间、群管理、消息收发、记忆管理，以及一套完整的**视觉浏览器自动化**。
 
 <p>
   <img src="https://img.shields.io/badge/version-5.9.0-blue" alt="version">
@@ -51,7 +51,7 @@
 | 🤖 **AI 声聊** | QQ 官方免费 TTS，指定角色发送语音 |
 | 🌐 **浏览器自动化** | 坐标交互（点击/双击/右键/长按/拖拽/悬停/输入）、搜索、标签页、收藏夹、反风控伪装 |
 | 🧪 **工作区** | Python 代码执行（AST 沙箱）、文件读写、图片生成与发送 |
-| 🛡️ **权限控制** | 110 个工具逐一配置 `global/admin/disabled`，63 个敏感工具默认仅管理员可用 |
+| 🛡️ **权限控制** | 111 个工具逐一配置 `global/admin/disabled`，63 个敏感工具默认仅管理员可用 |
 | 🔎 **工具调优** | 为任意工具**补充搜索词**、自定义**返回文案**（WebUI 可视化编辑） |
 | 🔒 **隐私模式** | 群号/QQ号 SHA1 不可逆脱敏，LLM 看不到真实 ID |
 | ⚡ **稳定性** | 全部 NapCat API 带超时、异步无阻塞、后台任务防回收、浏览器空闲自动回收 |
@@ -83,7 +83,7 @@ git clone https://github.com/Wyccotccy/astrbot_plugin_Wyc_Tools.git
 
 ### 三步工具调用机制（LLM 必读）
 
-插件共有 110 个工具，**不会一次性全部注入上下文**（那会浪费大量 token）。LLM 必须遵循三步流程：
+插件共有 111 个工具，**不会一次性全部注入上下文**（那会浪费大量 token）。LLM 必须遵循三步流程：
 
 ```
 第 1 步：search_wyc_tools("关键词")      ← 用简短关键词搜索，禁止用完整问句
@@ -247,7 +247,7 @@ git clone https://github.com/Wyccotccy/astrbot_plugin_Wyc_Tools.git
 ## 完整工具列表
 
 <details>
-<summary><b>展开全部 110 个工具</b></summary>
+<summary><b>展开全部 111 个工具</b></summary>
 
 ### 记忆管理（5）
 `add_memory` · `search_memories` · `update_memory` · `delete_memory` · `get_memory_detail`
@@ -275,9 +275,13 @@ git clone https://github.com/Wyccotccy/astrbot_plugin_Wyc_Tools.git
 `set_essence_msg` · `delete_essence_msg` · `get_group_members_info` · `get_group_shut_list`
 `get_group_honor_info` · `get_group_at_all_remain` · `get_group_ignore_add_request` · `send_group_sign`
 
-### 群文件（9）
+### 群文件（10）
 `list_group_files` · `upload_group_file` · `delete_group_file` · `create_group_file_folder`
-`delete_group_folder` · `move_group_file` · `rename_group_file` · `trans_group_file` · `get_share_link`
+`delete_group_folder` · `move_group_file` · `rename_group_file` · `trans_group_file` · `get_group_file_url` · `get_share_link`
+
+支持列出根目录或指定文件夹的名称、ID、大小和日期，按目录上传，以及获取实际下载 URL。
+操作前请使用本次列表返回的 `file_id`、`folder_id`、`current_parent_directory` 和 `busid`；
+`trans_group_file` 只提交 NapCat 传输请求。参数、命令、隐私模式和接口限制见[群文件操作说明](docs/群文件操作说明.md)。
 
 ### 个人资料（4）
 `set_qq_profile` · `set_qq_avatar` · `fetch_custom_face` · `set_input_status`
@@ -391,7 +395,7 @@ WebUI → 插件 → 更多LLM工具 → 配置页。共 **175 个配置项**，
 
 ## 管理员命令
 
-51 个 QQ 命令走独立路径，**仅 AstrBot 管理员**（`admins_id`）可用，不受 LLM 权限体系影响：
+52 个 QQ 命令走独立路径，**仅 AstrBot 管理员**（`admins_id`）可用，不受 LLM 权限体系影响：
 
 <details>
 <summary><b>展开命令列表</b></summary>
@@ -415,7 +419,9 @@ WebUI → 插件 → 更多LLM工具 → 配置页。共 **175 个配置项**，
 | `/whole_ban <on/off>` | 全体禁言 |
 | `/set_card <QQ号> <昵称>` | 改名片 |
 | `/send_notice <内容>` / `/del_notice <公告ID>` / `/list_notices` | 群公告 |
-| `/list_files` / `/delete_group_file <file_id>` / `/upload_file <路径> [文件名]` | 群文件 |
+| `/list_files [folder_id] [file_count]` | 列出根目录或指定群文件夹，默认根目录、50 条 |
+| `/delete_group_file <file_id> [busid]` / `/upload_file <路径> [文件名]` | 删除 / 上传群文件 |
+| `/get_group_file_url <file_id> [busid]` | 获取群文件的实际下载 URL |
 | `/create_folder <名称>` / `/del_folder <ID>` | 群文件夹 |
 | `/move_group_file` / `/rename_group_file` / `/trans_group_file` | 文件操作 |
 | `/group_members` | 群成员列表 |

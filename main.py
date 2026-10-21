@@ -49,6 +49,7 @@ from .core.takeover import (
     REASON_BROWSER_GONE, REASON_ABORTED, REASON_TEXT,
 )
 from .core.image_utils import convert_image_format, get_format_from_config, get_output_ext
+from .core.group_files import unwrap_group_file_response
 
 import mcp
 
@@ -1536,7 +1537,7 @@ class Main(Star):
             "get_user_group_role": True, "set_essence_msg": True, "delete_essence_msg": True,
             "set_group_ban": True, "set_group_kick": True, "set_group_whole_ban": True, "set_group_card": True,
             "send_group_notice": True, "delete_group_notice": True, "list_group_files": True,
-            "delete_group_file": True, "get_group_members_info": True, "set_group_admin": True,
+            "delete_group_file": True, "get_group_file_url": True, "get_group_members_info": True, "set_group_admin": True,
             "set_group_name": True, "get_group_notice_list": True, "upload_group_file": True,
             "create_group_file_folder": True, "delete_group_folder": True, "get_group_honor_info": True,
             "get_group_at_all_remain": True, "set_group_special_title": True, "get_group_shut_list": True,
@@ -3144,7 +3145,7 @@ class Main(Star):
 
         return re.sub(r"\b\d{5,12}\b", _repl, text)
 
-    def _privacy_filter_result(self, result):
+    def _privacy_filter_result(self, result, tool_name: str = ""):
         """对工具返回值做隐私脱敏（仅处理 message 文本字段）。"""
         if not self._privacy_on():
             return result
@@ -3152,7 +3153,21 @@ class Main(Star):
             msg = result.get("message")
             if isinstance(msg, str):
                 result = dict(result)
-                result["message"] = self._apply_privacy(msg)
+                if tool_name in {
+                    "list_group_files", "upload_group_file", "delete_group_file",
+                    "create_group_file_folder", "delete_group_folder", "move_group_file",
+                    "rename_group_file", "trans_group_file", "get_group_file_url",
+                }:
+                    # 仅保留群文件工具的操作字段；UUID 中的数字片段和签名 URL 不能被改写。
+                    pattern = r"(?m)^[ \t]*(?:file_id|folder_id|current_parent_directory|target_parent_directory|busid|url):[^\r\n]*$"
+                    parts, end = [], 0
+                    for match in re.finditer(pattern, msg):
+                        parts.extend((self._apply_privacy(msg[end:match.start()]), match.group(0)))
+                        end = match.end()
+                    parts.append(self._apply_privacy(msg[end:]))
+                    result["message"] = "".join(parts)
+                else:
+                    result["message"] = self._apply_privacy(msg)
         return result
 
     def _build_tool_registry(self) -> Dict[str, dict]:
@@ -3716,8 +3731,13 @@ class Main(Star):
 
         registry["list_group_files"] = {
             "name": "list_group_files",
-            "description": "查询群根目录的文件和文件夹。返回名称、ID、文件大小和上传时间，以及文件夹的文件数和创建信息；仅展示本次 API 返回内容，不递归读取子目录。",
-            "parameters": {"type": "object", "properties": {}, "required": []},
+            "description": "查询群文件和文件夹，默认根目录；传 folder_id 可查看子目录。返回可用于移动/删除/重命名的最新 file_id、父目录 ID、busid、大小及日期。仅展示本次 API 返回内容，不递归。",
+            "parameters": {
+                "type": "object", "properties": {
+                    "folder_id": {"type": "string", "description": "要查询的文件夹 ID，默认 / 表示根目录，请使用列表中的真实 ID，不是文件夹名称"},
+                    "file_count": {"type": "integer", "description": "请求返回的条目数量，默认 50，可增大以查询更多条目", "minimum": 1}
+                }, "required": []
+            },
             "keywords": [
                 "群文件", "文件列表", "list files", "查看文件", "群共享文件", "群资料", "群文档", "有哪些文件",
                 "看看群文件", "列出群文件", "群文件夹", "文件夹列表", "上传时间", "group files", "list group files", "show files", "dir"
@@ -3731,7 +3751,8 @@ class Main(Star):
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "file_id": {"type": "string", "description": "文件ID，必填（可通过 list_group_files 获取）"}
+                    "file_id": {"type": "string", "description": "文件ID，必填，请通过 list_group_files 获取当前有效 ID"},
+                    "busid": {"type": "integer", "description": "可选，文件列表返回的 busid；不要猜测或固定为 102", "minimum": 1}
                 },
                 "required": ["file_id"]
             },
@@ -3808,7 +3829,8 @@ class Main(Star):
                 "type": "object",
                 "properties": {
                     "file_path": {"type": "string", "description": "本地文件的绝对路径，必填"},
-                    "file_name": {"type": "string", "description": "上传后显示的文件名，可选"}
+                    "file_name": {"type": "string", "description": "上传后显示的文件名，可选"},
+                    "folder_id": {"type": "string", "description": "目标文件夹 ID，默认 / 表示根目录"}
                 },
                 "required": ["file_path"]
             },
@@ -3970,7 +3992,7 @@ class Main(Star):
         # ---------- 群文件移动/重命名/传输 ----------
         registry["move_group_file"] = {
             "name": "move_group_file",
-            "description": "移动群文件到指定目录。",
+            "description": "移动群文件到指定目录。file_id 和目录 ID 必须来自最新文件列表；目录参数使用真实 folder_id，根目录为 /。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -3989,7 +4011,7 @@ class Main(Star):
 
         registry["rename_group_file"] = {
             "name": "rename_group_file",
-            "description": "重命名群文件。",
+            "description": "重命名群文件。file_id 和当前目录 ID 请从最新文件列表获取，根目录为 /；new_name 是新的完整文件名。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -4008,7 +4030,7 @@ class Main(Star):
 
         registry["trans_group_file"] = {
             "name": "trans_group_file",
-            "description": "传输群文件（获取下载链接等）。",
+            "description": "提交 NapCat 群文件传输请求，仅返回操作结果。获取下载链接请使用 get_group_file_url。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -4017,10 +4039,22 @@ class Main(Star):
                 "required": ["file_id"]
             },
             "keywords": [
-                "传输文件", "获取文件链接", "trans file", "下载链接", "文件直链", "群文件下载", "获取下载地址",
-                "get file url", "transfer file"
+                "传输文件", "传输群文件", "trans file", "transfer file"
             ],
             "handler": self.trans_group_file
+        }
+
+        registry["get_group_file_url"] = {
+            "name": "get_group_file_url",
+            "description": "获取当前群文件的实际下载链接。请先通过 list_group_files 获取有效 file_id；NapCat 重启或缓存过期后需重新查询。",
+            "parameters": {
+                "type": "object", "properties": {
+                    "file_id": {"type": "string", "description": "最新群文件列表中的 file_id，必填"},
+                    "busid": {"type": "integer", "description": "可选，列表中的 busid，用于兼容旧版本 NapCat", "minimum": 1}
+                }, "required": ["file_id"]
+            },
+            "keywords": ["群文件下载", "下载链接", "文件直链", "获取文件链接", "获取下载地址", "get file url"],
+            "handler": self.get_group_file_url
         }
 
         # ---------- 点赞 ----------
@@ -5172,7 +5206,7 @@ class Main(Star):
             else:
                 result = await handler(event, **args_dict)
             # 隐私模式下对返回文本脱敏（隐藏群号/QQ号）
-            result = self._privacy_filter_result(result)
+            result = self._privacy_filter_result(result, tool_name)
             # 自定义返回文案：追加在工具返回给 AI 的文本末尾（issue #15，仅追加不覆盖真实结果）
             result = self._apply_tool_note(tool_name, result)
             # 兜底护栏：阻止 base64 长串作为文本进入 LLM 上下文（极耗 token）
@@ -8046,18 +8080,53 @@ class Main(Star):
         except Exception as e:
             return {"status": "error", "message": f"撤回公告失败: {_safe_error_msg(e)}"}
 
-    async def list_group_files(self, event: AiocqhttpMessageEvent) -> dict:
+    async def _call_group_file_api(self, event, action: str, **params) -> dict:
+        """群文件接口统一超时、解包及业务结果校验，不改变其他工具的调用行为。"""
+        client = await self._get_client(event)
+        if not client:
+            raise ValueError("无法获取客户端")
+        return unwrap_group_file_response(await self._call(client, action, **params))
+
+    @staticmethod
+    def _group_file_text(value, label: str) -> str:
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"{label}不能为空")
+        return value.strip()
+
+    @staticmethod
+    def _group_file_busid(value) -> dict:
+        if value is None:
+            return {}
+        if isinstance(value, bool) or not str(value).isdigit() or not 1 <= int(value) <= 0xFFFFFFFF:
+            raise ValueError("busid 必须是文件列表中返回的正整数")
+        return {"busid": int(value)}
+
+    async def list_group_files(self, event: AiocqhttpMessageEvent, folder_id: str = "/", file_count: int = 50) -> dict:
         if not self.config.get("group_manage_enabled", True):
             return {"status": "error", "message": "❌ 群管理功能已禁用"}
         try:
             group_id = event.get_group_id()
             if not group_id:
                 return {"status": "error", "message": "无法获取群号"}
-            result = await event.bot.get_group_root_files(group_id=int(group_id))
+            folder_id = self._group_file_text(folder_id, 'folder_id')
+            if isinstance(file_count, bool) or not str(file_count).isdigit() or int(file_count) < 1:
+                raise ValueError("file_count 必须是正整数")
+            params = {"group_id": int(group_id), "file_count": int(file_count)}
+            if folder_id == '/':
+                action = 'get_group_root_files'
+            else:
+                action = 'get_group_files_by_folder'
+                params['folder_id'] = folder_id
+            result = await self._call_group_file_api(event, action, **params)
+            if not any(key in result for key in ('files', 'folders')):
+                raise ValueError("接口未返回文件列表，请检查 NapCat 返回结果")
             files = result.get('files') or []
             folders = result.get('folders') or []
+            if not isinstance(files, list) or not isinstance(folders, list):
+                raise ValueError("接口返回的文件列表格式无效")
+            directory = '根目录' if folder_id == '/' else '文件夹'
             if not files and not folders:
-                return {"status": "success", "message": f"群 {group_id} 根目录下没有文件或文件夹"}
+                return {"status": "success", "message": f"群 {group_id} {directory}下没有文件或文件夹\ncurrent_parent_directory: {folder_id}"}
 
             def format_time(timestamp):
                 # 可读日期避免隐私模式将十位时间戳当作 QQ 号脱敏；同时保留原值。
@@ -8068,7 +8137,10 @@ class Main(Star):
                 except (TypeError, ValueError, OverflowError, OSError):
                     return '未知'
 
-            lines = [f"群 {group_id} 根目录（本次返回 {len(files)} 个文件、{len(folders)} 个文件夹）："]
+            lines = [
+                f"群 {group_id} {directory}（本次返回 {len(files)} 个文件、{len(folders)} 个文件夹，请求数量 {file_count}）：",
+                f"current_parent_directory: {folder_id}",
+            ]
             for folder in folders:
                 create_time = folder.get('create_time')
                 lines.append(
@@ -8086,6 +8158,7 @@ class Main(Star):
                 lines.append(
                     f"📄 {name} ({size_mb:.2f} MB, {size} 字节)\n"
                     f"  file_id: {f.get('file_id') or 'N/A'}\n"
+                    f"  busid: {f.get('busid', '未知')}\n"
                     f"  上传时间: {format_time(upload_time)} [upload_time: {upload_time if upload_time is not None else '未知'}]"
                 )
             msg = "\n".join(lines)
@@ -8093,17 +8166,19 @@ class Main(Star):
         except Exception as e:
             return {"status": "error", "message": f"查询文件失败: {_safe_error_msg(e)}"}
 
-    async def delete_group_file(self, event: AiocqhttpMessageEvent, file_id: str = None) -> dict:
+    async def delete_group_file(self, event: AiocqhttpMessageEvent, file_id: str = None, busid: int = None) -> dict:
         if not self.config.get("group_manage_enabled", True):
             return {"status": "error", "message": "❌ 群管理功能已禁用"}
         try:
             group_id = event.get_group_id()
             if not group_id:
                 return {"status": "error", "message": "无法获取群号"}
-            if not file_id:
-                return {"status": "error", "message": "❌ 参数缺失：请提供 file_id"}
-            await event.bot.delete_group_file(group_id=int(group_id), file_id=file_id)
-            return {"status": "success", "message": f"✅ 已删除群文件 {file_id}"}
+            file_id = self._group_file_text(file_id, 'file_id')
+            await self._call_group_file_api(
+                event, 'delete_group_file', group_id=int(group_id), file_id=file_id,
+                **self._group_file_busid(busid),
+            )
+            return {"status": "success", "message": f"✅ 群文件已删除\nfile_id: {file_id}"}
         except Exception as e:
             return {"status": "error", "message": f"删除文件失败: {_safe_error_msg(e)}"}
 
@@ -8189,21 +8264,26 @@ class Main(Star):
         except Exception as e:
             return {"status": "error", "message": f"获取公告失败: {_safe_error_msg(e)}"}
 
-    async def upload_group_file(self, event: AiocqhttpMessageEvent, file_path: str, file_name: str = "") -> dict:
+    async def upload_group_file(self, event: AiocqhttpMessageEvent, file_path: str, file_name: str = "", folder_id: str = "/") -> dict:
         if not self.config.get("group_manage_enabled", True):
             return {"status": "error", "message": "❌ 群管理功能已禁用"}
         group_id = event.get_group_id()
         if not group_id:
             return {"status": "error", "message": "无法获取群号"}
-        if not file_path or not os.path.exists(file_path):
+        if not file_path or not os.path.isfile(file_path):
             return {"status": "error", "message": f"文件不存在: {file_path}"}
-        client = await self._get_client(event)
-        if not client:
-            return {"status": "error", "message": "无法获取客户端"}
         try:
+            folder_id = self._group_file_text(folder_id, 'folder_id')
             name = file_name if file_name else os.path.basename(file_path)
-            result = await self._call(client, 'upload_group_file', group_id=int(group_id), file=file_path, name=name)
-            return {"status": "success", "message": f"✅ 文件上传成功，file_id: {result.get('file_id', '未知')}"}
+            params = {"group_id": int(group_id), "file": file_path, "name": name}
+            if folder_id != '/':
+                params['folder'] = folder_id
+            result = await self._call_group_file_api(event, 'upload_group_file', **params)
+            lines = [f"✅ 文件上传成功：{name}", f"current_parent_directory: {folder_id}"]
+            if result.get('file_id'):
+                lines.append(f"file_id: {result['file_id']}")
+            lines.append("上传接口返回的 ID 可能是原始 UUID；后续操作请重新调用 list_group_files 获取最新 file_id。")
+            return {"status": "success", "message": "\n".join(lines)}
         except Exception as e:
             return {"status": "error", "message": f"上传失败: {_safe_error_msg(e)}"}
 
@@ -8213,12 +8293,32 @@ class Main(Star):
         group_id = event.get_group_id()
         if not group_id:
             return {"status": "error", "message": "无法获取群号"}
-        client = await self._get_client(event)
-        if not client:
-            return {"status": "error", "message": "无法获取客户端"}
         try:
-            result = await self._call(client, 'create_group_file_folder', group_id=int(group_id), folder_name=folder_name)
-            return {"status": "success", "message": f"✅ 文件夹创建成功，ID: {result.get('folder_id', '未知')}"}
+            if not isinstance(folder_name, str) or not folder_name.strip():
+                raise ValueError("文件夹名称不能为空")
+            result = await self._call_group_file_api(
+                event, 'create_group_file_folder', group_id=int(group_id), folder_name=folder_name,
+            )
+            folder_id = result.get('folder_id')
+            items = result.get('groupItem') or []
+            if isinstance(items, dict):
+                items = [items]
+            if not folder_id and isinstance(items, list):
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
+                    info = item.get('folderInfo') or item
+                    if not isinstance(info, dict):
+                        continue
+                    item_name = info.get('folderName') or info.get('folder_name')
+                    if item_name and item_name != folder_name:
+                        continue
+                    folder_id = info.get('folderId') or info.get('folder_id')
+                    if folder_id:
+                        break
+            msg = f"✅ 文件夹创建成功：{folder_name}"
+            msg += f"\nfolder_id: {folder_id}" if folder_id else "\n接口未返回文件夹 ID，请调用 list_group_files 获取。"
+            return {"status": "success", "message": msg}
         except Exception as e:
             return {"status": "error", "message": f"创建失败: {_safe_error_msg(e)}"}
 
@@ -8228,12 +8328,12 @@ class Main(Star):
         group_id = event.get_group_id()
         if not group_id:
             return {"status": "error", "message": "无法获取群号"}
-        client = await self._get_client(event)
-        if not client:
-            return {"status": "error", "message": "无法获取客户端"}
         try:
-            await self._call(client, 'delete_group_folder', group_id=int(group_id), folder_id=folder_id)
-            return {"status": "success", "message": f"✅ 文件夹 {folder_id} 已删除"}
+            folder_id = self._group_file_text(folder_id, 'folder_id')
+            if folder_id == '/':
+                raise ValueError("不能删除群文件根目录")
+            await self._call_group_file_api(event, 'delete_group_folder', group_id=int(group_id), folder_id=folder_id)
+            return {"status": "success", "message": f"✅ 文件夹已删除\nfolder_id: {folder_id}"}
         except Exception as e:
             return {"status": "error", "message": f"删除失败: {_safe_error_msg(e)}"}
 
@@ -8412,16 +8512,19 @@ class Main(Star):
         group_id = event.get_group_id()
         if not group_id:
             return {"status": "error", "message": "无法获取群号"}
-        client = await self._get_client(event)
-        if not client:
-            return {"status": "error", "message": "无法获取客户端"}
         try:
-            result = await self._call(client, 'move_group_file', group_id=group_id, file_id=file_id,
-                                             current_parent_directory=current_parent_directory,
-                                             target_parent_directory=target_parent_directory)
-            if result.get('data', {}).get('ok'):
-                return {"status": "success", "message": "✅ 文件移动成功"}
-            return {"status": "error", "message": "移动失败"}
+            file_id = self._group_file_text(file_id, 'file_id')
+            current_parent_directory = self._group_file_text(current_parent_directory, '当前父目录 ID')
+            target_parent_directory = self._group_file_text(target_parent_directory, '目标父目录 ID')
+            await self._call_group_file_api(
+                event, 'move_group_file', group_id=int(group_id), file_id=file_id,
+                current_parent_directory=current_parent_directory,
+                target_parent_directory=target_parent_directory,
+            )
+            return {"status": "success", "message": (
+                f"✅ 文件移动成功\nfile_id: {file_id}\n"
+                f"current_parent_directory: {target_parent_directory}"
+            )}
         except Exception as e:
             return {"status": "error", "message": f"移动失败: {_safe_error_msg(e)}"}
 
@@ -8431,15 +8534,19 @@ class Main(Star):
         group_id = event.get_group_id()
         if not group_id:
             return {"status": "error", "message": "无法获取群号"}
-        client = await self._get_client(event)
-        if not client:
-            return {"status": "error", "message": "无法获取客户端"}
         try:
-            result = await self._call(client, 'rename_group_file', group_id=group_id, file_id=file_id,
-                                             current_parent_directory=current_parent_directory, new_name=new_name)
-            if result.get('data', {}).get('ok'):
-                return {"status": "success", "message": f"✅ 文件已重命名为：{new_name}"}
-            return {"status": "error", "message": "重命名失败"}
+            file_id = self._group_file_text(file_id, 'file_id')
+            current_parent_directory = self._group_file_text(current_parent_directory, '当前父目录 ID')
+            if not isinstance(new_name, str) or not new_name.strip():
+                raise ValueError("新文件名不能为空")
+            await self._call_group_file_api(
+                event, 'rename_group_file', group_id=int(group_id), file_id=file_id,
+                current_parent_directory=current_parent_directory, new_name=new_name,
+            )
+            return {"status": "success", "message": (
+                f"✅ 文件已重命名为：{new_name}\nfile_id: {file_id}\n"
+                f"current_parent_directory: {current_parent_directory}"
+            )}
         except Exception as e:
             return {"status": "error", "message": f"重命名失败: {_safe_error_msg(e)}"}
 
@@ -8449,16 +8556,31 @@ class Main(Star):
         group_id = event.get_group_id()
         if not group_id:
             return {"status": "error", "message": "无法获取群号"}
-        client = await self._get_client(event)
-        if not client:
-            return {"status": "error", "message": "无法获取客户端"}
         try:
-            result = await self._call(client, 'trans_group_file', group_id=group_id, file_id=file_id)
-            if result.get('data', {}).get('ok'):
-                return {"status": "success", "message": "✅ 文件传输请求成功"}
-            return {"status": "error", "message": "传输失败"}
+            file_id = self._group_file_text(file_id, 'file_id')
+            await self._call_group_file_api(event, 'trans_group_file', group_id=int(group_id), file_id=file_id)
+            return {"status": "success", "message": f"✅ 文件传输请求成功\nfile_id: {file_id}"}
         except Exception as e:
             return {"status": "error", "message": f"传输失败: {_safe_error_msg(e)}"}
+
+    async def get_group_file_url(self, event: AiocqhttpMessageEvent, file_id: str, busid: int = None) -> dict:
+        if not self.config.get("group_manage_enabled", True):
+            return {"status": "error", "message": "❌ 群管理功能已禁用"}
+        try:
+            group_id = event.get_group_id()
+            if not group_id:
+                return {"status": "error", "message": "无法获取群号"}
+            file_id = self._group_file_text(file_id, 'file_id')
+            result = await self._call_group_file_api(
+                event, 'get_group_file_url', group_id=int(group_id), file_id=file_id,
+                **self._group_file_busid(busid),
+            )
+            url = result.get('url')
+            if not isinstance(url, str) or not url.startswith(('http://', 'https://')):
+                raise ValueError("接口未返回下载链接，请重新列出文件获取最新 file_id，并检查 NapCat packet 服务状态")
+            return {"status": "success", "message": f"群文件下载链接：\nfile_id: {file_id}\nurl: {url}", "url": url}
+        except Exception as e:
+            return {"status": "error", "message": f"获取群文件链接失败: {_safe_error_msg(e)}"}
 
     async def send_like_tool(self, event: AstrMessageEvent, user_id: str, times: int = 1) -> dict:
         if not user_id or not user_id.strip():
@@ -10349,9 +10471,10 @@ class Main(Star):
 /set_card <QQ号> <新群昵称>
 /send_notice <公告内容>
 /del_notice <公告ID>
-/list_files
+/list_files [folder_id] [file_count]
 /group_members
-/delete_group_file <file_id>
+/delete_group_file <file_id> [busid]
+/get_group_file_url <file_id> [busid]  获取群文件下载链接
 /set_admin <QQ号> <on/off>
 /set_group_name <新群名>
 /list_notices
@@ -10381,7 +10504,7 @@ class Main(Star):
 
 /move_group_file <file_id> <当前目录> <目标目录>  移动群文件
 /rename_group_file <file_id> <当前目录> <新名称>  重命名群文件
-/trans_group_file <file_id>  传输群文件（获取链接）
+/trans_group_file <file_id>  提交群文件传输请求
 
 ═══ 以下功能仅限 LLM 工具调用（通过 run_wyc_tool）═══
 
@@ -10729,17 +10852,33 @@ AI语音: get_ai_characters, send_ai_voice
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("list_files")
     async def cmd_list_files(self, event: AiocqhttpMessageEvent):
-        result = await self.list_group_files(event)
+        args = event.message_str.strip().split()
+        if len(args) > 3:
+            await event.send(MessageChain().message("用法：/list_files [folder_id] [file_count]，根目录为 /"))
+            return
+        folder_id = args[1] if len(args) > 1 else '/'
+        file_count = args[2] if len(args) > 2 else 50
+        result = await self.list_group_files(event, folder_id, file_count)
         await event.send(MessageChain().message(result.get("message", "操作失败")))
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("delete_group_file")
     async def cmd_delete_group_file(self, event: AiocqhttpMessageEvent):
         args = event.message_str.strip().split()
-        if len(args) < 2:
-            await event.send(MessageChain().message("用法：/delete_group_file <file_id>"))
+        if not 2 <= len(args) <= 3:
+            await event.send(MessageChain().message("用法：/delete_group_file <file_id> [busid]"))
             return
-        result = await self.delete_group_file(event, args[1])
+        result = await self.delete_group_file(event, args[1], args[2] if len(args) > 2 else None)
+        await event.send(MessageChain().message(result.get("message", "操作失败")))
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("get_group_file_url")
+    async def cmd_get_group_file_url(self, event: AiocqhttpMessageEvent):
+        args = event.message_str.strip().split()
+        if not 2 <= len(args) <= 3:
+            await event.send(MessageChain().message("用法：/get_group_file_url <file_id> [busid]"))
+            return
+        result = await self.get_group_file_url(event, args[1], args[2] if len(args) > 2 else None)
         await event.send(MessageChain().message(result.get("message", "操作失败")))
 
     @filter.permission_type(filter.PermissionType.ADMIN)

@@ -570,6 +570,11 @@
     "type": "bool",
     "default": true
   },
+  "enable_get_group_file_url": {
+    "description": "启用工具: get_group_file_url (获取群文件下载链接)",
+    "type": "bool",
+    "default": true
+  },
   "enable_get_group_members_info": {
     "description": "启用工具: get_group_members_info (获取群成员列表)",
     "type": "bool",
