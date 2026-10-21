@@ -18,7 +18,7 @@ from email.mime.text import MIMEText
 from email.header import Header
 from email.utils import formataddr
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Any, Tuple
 from urllib.parse import urlencode, quote as url_quote, urljoin
 
@@ -3716,11 +3716,11 @@ class Main(Star):
 
         registry["list_group_files"] = {
             "name": "list_group_files",
-            "description": "查询群文件列表（根目录）。返回文件名和大小。",
+            "description": "查询群根目录的文件和文件夹。返回名称、ID、文件大小和上传时间，以及文件夹的文件数和创建信息；仅展示本次 API 返回内容，不递归读取子目录。",
             "parameters": {"type": "object", "properties": {}, "required": []},
             "keywords": [
                 "群文件", "文件列表", "list files", "查看文件", "群共享文件", "群资料", "群文档", "有哪些文件",
-                "看看群文件", "列出群文件", "group files", "list group files", "show files", "dir"
+                "看看群文件", "列出群文件", "群文件夹", "文件夹列表", "上传时间", "group files", "list group files", "show files", "dir"
             ],
             "handler": self.list_group_files
         }
@@ -8054,17 +8054,40 @@ class Main(Star):
             if not group_id:
                 return {"status": "error", "message": "无法获取群号"}
             result = await event.bot.get_group_root_files(group_id=int(group_id))
-            files = result.get('files', [])
-            if not files:
-                return {"status": "success", "message": f"群 {group_id} 根目录下没有文件"}
-            lines = [f"群 {group_id} 根目录文件列表："]
-            for f in files[:20]:
-                name = f.get('file_name', '未知')
-                size = f.get('file_size', 0)
+            files = result.get('files') or []
+            folders = result.get('folders') or []
+            if not files and not folders:
+                return {"status": "success", "message": f"群 {group_id} 根目录下没有文件或文件夹"}
+
+            def format_time(timestamp):
+                # 可读日期避免隐私模式将十位时间戳当作 QQ 号脱敏；同时保留原值。
+                if not timestamp:
+                    return '未知'
+                try:
+                    return datetime.fromtimestamp(float(timestamp), timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
+                except (TypeError, ValueError, OverflowError, OSError):
+                    return '未知'
+
+            lines = [f"群 {group_id} 根目录（本次返回 {len(files)} 个文件、{len(folders)} 个文件夹）："]
+            for folder in folders:
+                create_time = folder.get('create_time')
+                lines.append(
+                    f"📁 {folder.get('folder_name') or '未知'}\n"
+                    f"  folder_id: {folder.get('folder_id') or 'N/A'}\n"
+                    f"  文件数: {folder.get('total_file_count', '未知')}\n"
+                    f"  创建时间: {format_time(create_time)} [create_time: {create_time if create_time is not None else '未知'}]\n"
+                    f"  创建者 QQ: {folder.get('creator') or '未知'}"
+                )
+            for f in files:
+                name = f.get('file_name') or '未知'
+                size = f.get('file_size') or 0
                 size_mb = size / (1024 * 1024)
-                lines.append(f"  • {name} ({size_mb:.2f} MB) [file_id: {f.get('file_id', 'N/A')}]")
-            if len(files) > 20:
-                lines.append(f"  ... 共 {len(files)} 个文件，仅显示前20个")
+                upload_time = f.get('upload_time')
+                lines.append(
+                    f"📄 {name} ({size_mb:.2f} MB, {size} 字节)\n"
+                    f"  file_id: {f.get('file_id') or 'N/A'}\n"
+                    f"  上传时间: {format_time(upload_time)} [upload_time: {upload_time if upload_time is not None else '未知'}]"
+                )
             msg = "\n".join(lines)
             return {"status": "success", "message": msg}
         except Exception as e:
